@@ -1,0 +1,88 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  fmt:
+    name: Format
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2
+        with:
+          version: "0.16.0"
+      - name: Check formatting
+        run: zig fmt --check src/ build.zig
+
+  lint-actions:
+    name: Lint workflows
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: raven-actions/actionlint@3d39aea434753780c3b3d4a1a31c854b4dbf49d7 # v2.2.0
+
+  test:
+    name: Test / ${{ matrix.os }} / Zig ${{ matrix.zig }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        zig: ["0.16.0"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2
+        with:
+          version: ${{ matrix.zig }}
+      # Key includes the zon hash so a version change busts it correctly.
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: |
+            .zig-cache
+            ~/.cache/zig
+            ~/Library/Caches/zig
+            ~/AppData/Local/zig
+          key: zig-${{ runner.os }}-${{ matrix.zig }}-${{ hashFiles('build.zig.zon') }}
+          restore-keys: |
+            zig-${{ runner.os }}-${{ matrix.zig }}-
+            zig-${{ runner.os }}-
+      - name: Run tests
+        run: zig build test
+
+  sst:
+    name: Conformance
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2
+        with:
+          version: "0.16.0"
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: |
+            .zig-cache
+            ~/.cache/zig
+          key: zig-sst-${{ runner.os }}-${{ hashFiles('build.zig.zon') }}
+          restore-keys: |
+            zig-sst-${{ runner.os }}-
+      # GitHub-to-GitHub shallow clone is fast enough that caching the
+      # 1.6 GB test data would not pay for its own restore time.
+      - name: Fetch SingleStepTests data
+        run: tools/fetch_tests.sh
+      # The sst step pins its own ReleaseFast optimize mode in build.zig.
+      - name: Run conformance suite
+        run: zig build sst
